@@ -1,0 +1,10 @@
+[package]
+name = "wav-cue"
+version = "0.1.0"
+authors = ["Erkki Seppälä <erkki.seppala@vincit.fi>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.57"
+thiserror = "1.0.31"
+arrayref = "0.3.6"
