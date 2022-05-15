@@ -7,6 +7,10 @@ name: tag
 jobs:
   create_release:
     name: Create release
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -49,6 +53,10 @@ jobs:
   unix:
     name: WavCue
     needs: create_release
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -100,6 +108,10 @@ jobs:
   windows:
     name: WavCue
     needs: create_release
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
     strategy:
       matrix:
         os: [windows-latest]
