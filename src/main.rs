@@ -5,7 +5,40 @@ use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::io::Read;
-use std::io::Seek;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub struct WaveError {
+    pub message: String,
+}
+
+impl std::fmt::Display for WaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to process: {}", self.message)
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error(transparent)]
+    WaveError(#[from] WaveError),
+
+    // #[error(transparent)]
+    // TomlDeError(#[from] toml::de::Error),
+
+    // #[error(transparent)]
+    // TomlSerError(#[from] toml::ser::Error),
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
+    // #[error(transparent)]
+    // AtomicIOError(#[from] atomicwrites::Error<io::Error>),
+
+    // #[error("Cannot determine default host: {}", .0)]
+    // DefaultHostError(String),
+
+    // #[error(transparent)]
+    // RumaIdentifierError(#[from] ruma_identifiers::Error),
+}
 
 #[derive(Debug)]
 enum DataChunkId {
@@ -68,7 +101,7 @@ struct WaveFileInfo {
     bext: Option<BroadcastAudioExtension>,
 }
 
-fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
+fn read_wave(filename: &str) -> Result<WaveFileInfo, Error> {
     let file = File::open(filename)?;
     let mut reader = BufReader::new(file);
     let mut cues = Vec::new();
@@ -95,10 +128,20 @@ fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
             while let Ok(()) = reader.read_exact(&mut buf_tag) {
                 reader.read_exact(&mut buf_chunk32_size)?;
                 let chunk_size = u32::from_le_bytes(buf_chunk32_size);
-                assert!(chunk_size > 0); // TODO: use custom error type
+                if chunk_size == 0 {
+                    return Err(Error::from(WaveError {
+                        message: String::from("Cannot process empty chunk"),
+                    }));
+                }
                 if &buf_tag == b"bext" {
                     let mut buf_bext: [u8; 348] = [0; 348];
-                    assert!(chunk_size as usize >= buf_bext.len()); // TODO: use custom error type
+                    if (chunk_size as usize) < buf_bext.len() {
+                        return Err(Error::from(WaveError {
+                            message: format!(
+                                "BroadcastAudioExtension chunk has unexpected size: {chunk_size}"
+                            ),
+                        }));
+                    }
                     reader.read_exact(&mut buf_bext)?;
                     reader.seek_relative(chunk_size as i64 - buf_bext.len() as i64)?;
                     let mut ofs = 0;
@@ -139,8 +182,16 @@ fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
                     eprintln!("{bext:?}");
                 } else if &buf_tag == b"fmt " {
                     let mut buf_fmt: [u8; 16] = [0; 16];
-                    assert!(chunk_size >= 16); // TODO: use custom error type
-                    assert!(header.is_none()); // TODO: use custom error type
+                    if chunk_size < 16 {
+                        return Err(Error::from(WaveError {
+                            message: format!("fmt chunk is too small ({chunk_size} bytes)"),
+                        }));
+                    }
+                    if header.is_some() {
+                        return Err(Error::from(WaveError {
+                            message: format!("File cannot have two fmt headers"),
+                        }));
+                    }
                     reader.read_exact(&mut buf_fmt)?;
                     reader.seek_relative(chunk_size as i64 - buf_fmt.len() as i64)?;
                     let compression_code = u16::from_le_bytes(*array_ref!(buf_fmt, 0, 2));
@@ -164,7 +215,11 @@ fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
                     let mut buf_num_cue_points: [u8; 4] = [0; 4];
                     reader.read_exact(&mut buf_num_cue_points)?;
                     let num_cue_points = u32::from_le_bytes(buf_num_cue_points);
-                    assert!(chunk_size == 4 + 24 * num_cue_points); // TODO: use custom error type
+                    if chunk_size != 4 + 24 * num_cue_points {
+                        return Err(Error::from(WaveError {
+                            message: format!("Incorrect chunk size for cue: {chunk_size}"),
+                        }));
+                    }
                     for _ in 0..num_cue_points {
                         let mut buf_cue: [u8; 24] = [0; 24];
                         reader.read_exact(&mut buf_cue)?;
@@ -178,8 +233,9 @@ fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
                             } else if &id == b"sint" {
                                 DataChunkId::Sint
                             } else {
-                                // TODO: use custom error type
-                                panic!("Aiee");
+                                return Err(Error::from(WaveError {
+				    message: format!("Data chunk id should be either 'data' or 'sint', not {id:?}"),
+				}));
                             }
                         };
 
@@ -211,21 +267,29 @@ fn read_wave(filename: &str) -> Result<WaveFileInfo, std::io::Error> {
             }
             eprintln!("bytes left: {}", size as i64 - bytes_processed as i64);
         } else {
-            eprintln!("Not a wav file");
+            return Err(Error::from(WaveError {
+                message: format!("Not a wav file (no WAVE found)"),
+            }));
         }
     } else {
-        eprintln!("Not a wav file");
+        return Err(Error::from(WaveError {
+            message: format!("Not a wav file (no RIFF found)"),
+        }));
     }
 
     let header = match header {
         Some(header) => header,
-        None => panic!("No header"), //TODO: use custom error type
+        None => {
+            return Err(Error::from(WaveError {
+                message: format!("File did not have header"),
+            }))
+        }
     };
 
     Ok(WaveFileInfo { header, bext, cues })
 }
 
-fn process(filename: &str) -> Result<(), std::io::Error> {
+fn process(filename: &str) -> Result<(), Error> {
     let wave = read_wave(filename)?;
     for cue in wave.cues {
         let sample_start = cue.sample_start;
@@ -253,7 +317,7 @@ fn main() {
     if args.len() > 1 {
         let filename = &args[1];
         if let Err(error) = process(filename) {
-            eprintln!("Failed to process \"{filename}\": {error}");
+            eprintln!("{filename}: {error}");
         }
     } else {
         eprintln!("usage: zoom-cue filename.wav > filename.csv");
