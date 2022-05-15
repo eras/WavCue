@@ -320,6 +320,6 @@ fn main() {
             eprintln!("{filename}: {error}");
         }
     } else {
-        eprintln!("usage: zoom-cue filename.wav > filename.csv");
+        eprintln!("usage: wav-cue filename.wav > filename.csv");
     }
 }
